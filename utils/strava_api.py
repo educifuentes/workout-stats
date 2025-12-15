@@ -97,6 +97,30 @@ def validate_access_token(access_token: str) -> bool:
         return False
 
 
+def fetch_athlete(access_token: str) -> Optional[dict]:
+    """
+    Fetch athlete profile information from Strava API.
+    
+    Args:
+        access_token: Valid Strava access token
+        
+    Returns:
+        Dictionary with athlete data, None if fetch fails
+    """
+    url = "https://www.strava.com/api/v3/athlete"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if not response.ok:
+            return None
+        
+        return response.json()
+    except requests.exceptions.RequestException:
+        return None
+
+
 def fetch_activities(access_token: str, per_page: int = 200, max_pages: int = 5) -> pd.DataFrame:
     """
     Fetch athlete activities from Strava API with pagination.

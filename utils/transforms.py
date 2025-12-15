@@ -58,12 +58,13 @@ def normalize_activities(df: pd.DataFrame) -> pd.DataFrame:
     # Convert distance from meters to kilometers
     df["distance_km"] = df["distance"] / 1000.0
     
-    # Compute pace (seconds per km and minutes per km)
+    # Compute pace (seconds per km, minutes per km, and seconds per 100m)
     # Only valid when distance > 0
     mask_valid_distance = df["distance_km"] > 0
     
     df["pace_s_per_km"] = None
     df["pace_min_per_km"] = None
+    df["pace_s_per_100m"] = None
     
     # Pace = time / distance
     df.loc[mask_valid_distance, "pace_s_per_km"] = (
@@ -75,10 +76,16 @@ def normalize_activities(df: pd.DataFrame) -> pd.DataFrame:
         df.loc[mask_valid_distance, "pace_s_per_km"] / 60.0
     )
     
+    # Seconds per 100m = seconds per km / 10
+    df.loc[mask_valid_distance, "pace_s_per_100m"] = (
+        df.loc[mask_valid_distance, "pace_s_per_km"] / 10.0
+    )
+    
     # Create aggregation keys
     df["year"] = df["date"].dt.year
     df["year_week"] = df["date"].dt.to_period("W").astype(str)
     df["year_month"] = df["date"].dt.to_period("M").astype(str)
+    df["day"] = df["date"].dt.strftime("%Y-%m-%d")
     
     # Create distance buckets (useful for analysis)
     def get_distance_bucket(distance_km: float, sport_type: str) -> str:
@@ -130,10 +137,12 @@ def normalize_activities(df: pd.DataFrame) -> pd.DataFrame:
         "elapsed_time",
         "pace_s_per_km",
         "pace_min_per_km",
+        "pace_s_per_100m",
         "average_speed",
         "year",
         "year_week",
         "year_month",
+        "day",
         "distance_bucket"
     ]
     
@@ -146,15 +155,15 @@ def normalize_activities(df: pd.DataFrame) -> pd.DataFrame:
 
 def aggregate_by_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
     """
-    Aggregate activities by time period (week, month, or year).
+    Aggregate activities by time period (day, week, month, or year).
     
     Args:
         df: Normalized activities DataFrame
-        period: One of "week", "month", or "year"
+        period: One of "day", "week", "month", or "year"
         
     Returns:
         DataFrame aggregated by the specified period with:
-        - period key (year_week, year_month, or year)
+        - period key (day, year_week, year_month, or year)
         - total_distance_km: sum of distance
         - activity_count: number of activities
         - avg_pace_min_per_km: average pace (for running activities only)
@@ -163,6 +172,7 @@ def aggregate_by_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
         return pd.DataFrame()
     
     period_key_map = {
+        "day": "day",
         "week": "year_week",
         "month": "year_month",
         "year": "year"
@@ -188,7 +198,7 @@ def aggregate_by_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
             pace_agg.columns = [period_key, "avg_pace_min_per_km"]
             aggregated = aggregated.merge(pace_agg, on=period_key, how="left")
     
-    # Sort by period (most recent first for week/month, oldest first for year)
+    # Sort by period (most recent first for day/week/month, oldest first for year)
     if period == "year":
         aggregated = aggregated.sort_values(period_key)
     else:

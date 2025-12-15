@@ -9,16 +9,16 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import datetime, date, timedelta
-from utils.strava_api import get_access_token, fetch_activities
-from utils.transforms import normalize_activities, aggregate_by_period
+from utils.strava_api import get_access_token, fetch_activities, fetch_athlete
+from utils.transforms import normalize_activities
 from utils.kpis import distance_this_week, distance_this_month, distance_this_year, count_activities
 
 # Page configuration
 st.set_page_config(
-    page_title="Strava Training Dashboard",
-    page_icon="🏃",
+    page_title="Workout Dashboard",
+    page_icon=":pool:",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 
@@ -75,6 +75,42 @@ def load_activities():
     return activities_df
 
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def load_athlete():
+    """
+    Load athlete profile information from Strava API.
+    
+    Returns:
+        Dictionary with athlete data, None if fetch fails
+    """
+    try:
+        secrets = st.secrets["strava"]
+        client_id = secrets["client_id"]
+        client_secret = secrets["client_secret"]
+        refresh_token = secrets.get("refresh_token")
+        access_token = secrets.get("access_token")
+    except KeyError:
+        return None
+    
+    if not refresh_token and not access_token:
+        return None
+    
+    # Get access token
+    access_token = get_access_token(
+        client_id=client_id,
+        client_secret=client_secret,
+        refresh_token=refresh_token,
+        access_token=access_token
+    )
+    
+    if not access_token:
+        return None
+    
+    # Fetch athlete profile
+    athlete = fetch_athlete(access_token)
+    return athlete
+
+
 def filter_dataframe(df: pd.DataFrame, date_range: tuple[date, date], sport_type: str) -> pd.DataFrame:
     """
     Apply global filters to the activities DataFrame.
@@ -110,11 +146,35 @@ def main():
     """Main application entry point."""
     
     # Header section
-    st.title("🏃 Strava Training Dashboard")
+    st.title(":material/pool: Workout Dashboard")
     st.markdown("""
     Track your training volume and pace metrics from Strava activities.
     This dashboard shows distance trends over time and pace analysis by workout.
     """)
+    
+    # Load athlete profile information
+    athlete = load_athlete()
+    if athlete:
+        athlete_name = athlete.get("firstname", "") + " " + athlete.get("lastname", "")
+        athlete_name = athlete_name.strip() if athlete_name.strip() else athlete.get("username", "Athlete")
+        
+        # Calculate age from date of birth if available
+        dob = athlete.get("dateofbirth")
+        age = None
+        if dob:
+            try:
+                birth_date = datetime.strptime(dob, "%Y-%m-%d").date()
+                today = date.today()
+                age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+            except:
+                pass
+        
+        # Display athlete profile
+        profile_text = f"Athlete: **{athlete_name}**"
+        if age is not None:
+            profile_text += f" • Age: {age}"
+        
+        st.markdown(profile_text)
     
     # Load raw activities (cached)
     raw_activities = load_activities()
@@ -129,42 +189,43 @@ def main():
         st.warning("No activities after normalization. Check date filters.")
         st.stop()
     
-    # Global controls section
-    st.divider()
-    st.subheader("Controls")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
+    # Global controls section - moved to sidebar
+    with st.sidebar:
+        st.header("Controls")
+        
         if st.button("🔄 Refresh Data from Strava", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-    
-    with col2:
-        # Date range selector
+        
+        st.divider()
+        
+        # Date range selectors - separate inputs
         min_date = activities_df["date"].dt.date.min()
         max_date = activities_df["date"].dt.date.max()
-        date_range = st.date_input(
-            "Date Range",
-            value=(min_date, max_date),
+        
+        start_date = st.date_input(
+            "Start Date",
+            value=min_date,
             min_value=min_date,
             max_value=max_date,
-            help="Select the date range for analysis"
+            help="Select the start date for analysis"
         )
         
-        # Handle date range input (can be single date or tuple)
-        if isinstance(date_range, date):
-            date_range = (date_range, max_date)
-        elif isinstance(date_range, tuple) and len(date_range) == 2:
-            # Ensure both dates are set
-            if date_range[1] is None:
-                date_range = (date_range[0] if date_range[0] else min_date, max_date)
-            elif date_range[0] is None:
-                date_range = (min_date, date_range[1])
-        else:
-            date_range = (min_date, max_date)
-    
-    with col3:
+        end_date = st.date_input(
+            "End Date",
+            value=max_date,
+            min_value=min_date,
+            max_value=max_date,
+            help="Select the end date for analysis"
+        )
+        
+        # Ensure start_date <= end_date
+        if start_date > end_date:
+            st.warning("Start date must be before or equal to end date. Adjusting start date.")
+            start_date = end_date
+        
+        date_range = (start_date, end_date)
+        
         sport_types = ["All"] + sorted(activities_df["sport_type"].unique().tolist())
         selected_sport = st.selectbox(
             "Sport Type",
@@ -172,6 +233,18 @@ def main():
             index=0,
             help="Filter activities by sport type"
         )
+        
+        st.divider()
+        
+        # Volume granularity control
+        granularity = st.selectbox(
+            "Volume Granularity",
+            options=["Day", "Week", "Month"],
+            index=0,
+            key="volume_granularity"
+        )
+        
+        st.divider()
     
     # Apply filters
     filtered_df = filter_dataframe(activities_df, date_range, selected_sport)
@@ -182,7 +255,7 @@ def main():
     
     # KPIs section
     st.divider()
-    st.subheader("Key Performance Indicators")
+    st.subheader("Stats")
     
     kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
     
@@ -200,219 +273,86 @@ def main():
     
     with kpi_col4:
         activity_count = count_activities(filtered_df)
-        st.metric("Total Activities", f"{activity_count}")
+        st.metric("Total Workouts", f"{activity_count}")
     
     # Volume section
     st.divider()
     st.subheader("Training Volume")
     
-    vol_col1, vol_col2 = st.columns([1, 4])
-    
-    with vol_col1:
-        granularity = st.selectbox(
-            "Granularity",
-            options=["Week", "Month", "Year"],
-            index=0,
-            key="volume_granularity"
-        )
-    
-    # Aggregate by selected period
-    period_map = {"Week": "week", "Month": "month", "Year": "year"}
-    period_key = period_map[granularity]
-    aggregated = aggregate_by_period(filtered_df, period_key)
-    
-    if not aggregated.empty:
-        # Create volume chart (bar chart for week/month, line for year)
-        chart_type = "bar" if granularity in ["Week", "Month"] else "bar"
+    # Aggregate by selected period using pandas date truncation
+    if not filtered_df.empty:
+        # Map granularity to pandas frequency
+        freq_map = {
+            "Day": "D",
+            "Week": "W",
+            "Month": "M"
+        }
+        freq = freq_map[granularity]
         
-        # Prepare data for chart
-        chart_data = aggregated.copy()
+        # Ensure date column is timezone-naive datetime
+        df_for_agg = filtered_df.copy()
+        df_for_agg['date'] = pd.to_datetime(df_for_agg['date']).dt.tz_localize(None).dt.normalize()
         
-        # Create Altair chart
-        if chart_type == "bar":
-            chart = alt.Chart(chart_data).mark_bar().encode(
-                x=alt.X(
-                    f"{period_key}:O",
-                    title=granularity,
-                    sort=alt.SortField(field=f"{period_key}", order="ascending") if granularity == "Year" else None
-                ),
-                y=alt.Y(
-                    "total_distance_km:Q",
-                    title="Distance (km)"
-                ),
-                tooltip=[
-                    alt.Tooltip(f"{period_key}:O", title=granularity),
-                    alt.Tooltip("total_distance_km:Q", title="Distance (km)", format=".1f"),
-                    alt.Tooltip("activity_count:Q", title="Activities")
-                ]
-            ).properties(
-                width=700,
-                height=400,
-                title=f"Distance per {granularity}"
-            ).configure(
-                background="transparent",
-                axis=alt.AxisConfig(labelColor="white", titleColor="white", gridColor="#333333"),
-                text=alt.TextConfig(color="white")
+        # Aggregate using pd.Grouper (equivalent to SQL DATE_TRUNC)
+        aggregated = df_for_agg.groupby(pd.Grouper(key='date', freq=freq)).agg({
+            'distance_km': 'sum',
+            'sport_type': 'count'
+        }).reset_index()
+        aggregated.columns = ['date', 'total_distance_km', 'activity_count']
+        
+        # Remove rows with no activities (only show actual data)
+        aggregated = aggregated[aggregated['activity_count'] > 0].copy()
+        
+        if not aggregated.empty:
+            # Sort by date
+            aggregated = aggregated.sort_values('date')
+            
+            # Convert distance to meters for y-axis
+            aggregated['total_distance_m'] = aggregated['total_distance_km'] * 1000
+            
+            # Create bar chart with light blue color
+            light_blue = "#60a5fa"  # Tailwind blue-400
+            
+            chart = (
+                alt.Chart(aggregated)
+                .mark_bar(color=light_blue)
+                .encode(
+                    x=alt.X(
+                        'date:T',
+                        title=None,
+                        axis=alt.Axis(
+                            format='%Y-%m-%d',
+                            labelAngle=-45,
+                            labelFontSize=9
+                        )
+                    ),
+                    y=alt.Y('total_distance_m:Q', title=None),
+                    tooltip=[
+                        alt.Tooltip('date:T', format='%Y-%m-%d'),
+                        alt.Tooltip('total_distance_m:Q', format='.0f', title='Distance (m)'),
+                        alt.Tooltip('activity_count:Q', format='.0f', title='Activities')
+                    ]
+                )
+                .properties(
+                    width=600,
+                    height=300
+                )
             )
-        else:
-            chart = alt.Chart(chart_data).mark_line(point=True).encode(
-                x=alt.X(
-                    f"{period_key}:O",
-                    title=granularity
-                ),
-                y=alt.Y(
-                    "total_distance_km:Q",
-                    title="Distance (km)"
-                ),
-                tooltip=[
-                    alt.Tooltip(f"{period_key}:O", title=granularity),
-                    alt.Tooltip("total_distance_km:Q", title="Distance (km)", format=".1f"),
-                    alt.Tooltip("activity_count:Q", title="Activities")
-                ]
-            ).properties(
-                width=700,
-                height=400,
-                title=f"Distance per {granularity}"
-            ).configure(
-                background="transparent",
-                axis=alt.AxisConfig(labelColor="white", titleColor="white", gridColor="#333333"),
-                text=alt.TextConfig(color="white")
-            )
-        
-        with vol_col2:
+            
             st.altair_chart(chart, use_container_width=True)
-    
-    # Pace section
-    st.divider()
-    st.subheader("Pace by Workout")
-    
-    pace_col1, pace_col2 = st.columns([1, 4])
-    
-    with pace_col1:
-        pace_units = st.radio(
-            "Display Units",
-            options=["min/km", "s/km"],
-            index=0,
-            key="pace_units"
-        )
-        
-        # Distance filter for pace analysis
-        if "Run" in filtered_df["sport_type"].values:
-            min_dist = float(filtered_df["distance_km"].min())
-            max_dist = float(filtered_df["distance_km"].max())
-            
-            dist_range = st.slider(
-                "Distance Range (km)",
-                min_value=min_dist,
-                max_value=max_dist,
-                value=(min_dist, max_dist),
-                key="pace_dist_filter"
-            )
-            
-            # Filter by distance for pace charts
-            pace_df = filtered_df[
-                (filtered_df["distance_km"] >= dist_range[0]) &
-                (filtered_df["distance_km"] <= dist_range[1])
-            ].copy()
         else:
-            pace_df = filtered_df.copy()
-    
-    # Pace time series chart
-    if not pace_df.empty and "pace_min_per_km" in pace_df.columns:
-        # Filter out activities without valid pace
-        pace_df_valid = pace_df[pace_df["pace_min_per_km"].notna()].copy()
-        
-        if not pace_df_valid.empty:
-            # Select y-axis value based on units
-            if pace_units == "min/km":
-                y_field = "pace_min_per_km"
-                y_title = "Pace (min/km)"
-            else:
-                y_field = "pace_s_per_km"
-                y_title = "Pace (s/km)"
-            
-            # Time series scatter/line chart
-            time_series_chart = alt.Chart(pace_df_valid).mark_circle(size=60).encode(
-                x=alt.X(
-                    "date:T",
-                    title="Date",
-                    axis=alt.Axis(format="%Y-%m-%d")
-                ),
-                y=alt.Y(
-                    f"{y_field}:Q",
-                    title=y_title
-                ),
-                color=alt.Color(
-                    "distance_bucket:N",
-                    title="Distance Bucket",
-                    scale=alt.Scale(scheme="category10")
-                ),
-                tooltip=[
-                    alt.Tooltip("date:T", title="Date", format="%Y-%m-%d"),
-                    alt.Tooltip("name:N", title="Activity"),
-                    alt.Tooltip("distance_km:Q", title="Distance (km)", format=".2f"),
-                    alt.Tooltip("pace_min_per_km:Q", title="Pace (min/km)", format=".2f"),
-                    alt.Tooltip("sport_type:N", title="Sport")
-                ]
-            ).properties(
-                width=700,
-                height=400,
-                title="Pace Over Time"
-            ).configure(
-                background="transparent",
-                axis=alt.AxisConfig(labelColor="white", titleColor="white", gridColor="#333333"),
-                legend=alt.LegendConfig(labelColor="white", titleColor="white"),
-                text=alt.TextConfig(color="white")
-            )
-            
-            with pace_col2:
-                st.altair_chart(time_series_chart, use_container_width=True)
-            
-            # Distance vs Pace scatter chart
-            st.markdown("#### Pace vs Distance")
-            scatter_chart = alt.Chart(pace_df_valid).mark_circle(size=60).encode(
-                x=alt.X(
-                    "distance_km:Q",
-                    title="Distance (km)"
-                ),
-                y=alt.Y(
-                    f"{y_field}:Q",
-                    title=y_title
-                ),
-                color=alt.Color(
-                    "date:T",
-                    title="Date",
-                    scale=alt.Scale(scheme="viridis")
-                ),
-                tooltip=[
-                    alt.Tooltip("date:T", title="Date", format="%Y-%m-%d"),
-                    alt.Tooltip("name:N", title="Activity"),
-                    alt.Tooltip("distance_km:Q", title="Distance (km)", format=".2f"),
-                    alt.Tooltip("pace_min_per_km:Q", title="Pace (min/km)", format=".2f"),
-                    alt.Tooltip("sport_type:N", title="Sport")
-                ]
-            ).properties(
-                width=700,
-                height=400
-            ).configure(
-                background="transparent",
-                axis=alt.AxisConfig(labelColor="white", titleColor="white", gridColor="#333333"),
-                legend=alt.LegendConfig(labelColor="white", titleColor="white"),
-                text=alt.TextConfig(color="white")
-            )
-            
-            st.altair_chart(scatter_chart, use_container_width=True)
-        else:
-            st.info("No activities with valid pace data in the selected filters.")
-    else:
-        st.info("Pace analysis is only available for activities with distance and time data.")
+            st.info("No data available for the selected granularity.")
     
     # Data table section
     st.divider()
-    st.subheader("Activity Table")
+    st.subheader("Activity Data")
     
     # Prepare table data
     table_df = filtered_df.copy()
+    
+    # Calculate pace in minutes per meter
+    if "pace_min_per_km" in table_df.columns:
+        table_df["pace_min_per_m"] = table_df["pace_min_per_km"] / 1000.0
     
     # Format columns for display
     display_columns = {
@@ -421,7 +361,7 @@ def main():
         "name": "Activity Name",
         "distance_km": "Distance (km)",
         "moving_time": "Moving Time (s)",
-        "pace_min_per_km": "Pace (min/km)"
+        "pace_min_per_m": "Pace (min/m)"
     }
     
     # Select and rename columns
@@ -433,21 +373,39 @@ def main():
     if "Date" in table_display.columns:
         table_display["Date"] = table_display["Date"].dt.strftime("%Y-%m-%d %H:%M")
     
-    # Format pace
-    if "Pace (min/km)" in table_display.columns:
-        table_display["Pace (min/km)"] = table_display["Pace (min/km)"].apply(
-            lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"
-        )
+    # Format pace as MM:SS (minutes:seconds)
+    if "Pace (min/m)" in table_display.columns:
+        def format_pace_as_time(pace_min):
+            """Convert pace in minutes to MM:SS format."""
+            if pd.isna(pace_min) or pace_min == 0:
+                return "N/A"
+            # Convert to total seconds first for accuracy
+            total_seconds = pace_min * 60
+            minutes = int(total_seconds // 60)
+            seconds = int(round(total_seconds % 60))
+            # Handle case where seconds round to 60
+            if seconds == 60:
+                minutes += 1
+                seconds = 0
+            return f"{minutes}:{seconds:02d}"
+        
+        table_display["Pace (min/m)"] = table_display["Pace (min/m)"].apply(format_pace_as_time)
     
     # Format distance
     if "Distance (km)" in table_display.columns:
         table_display["Distance (km)"] = table_display["Distance (km)"].apply(lambda x: f"{x:.2f}")
     
-    st.dataframe(
-        table_display,
-        use_container_width=True,
-        hide_index=True,
-        height=400
+    # Display table
+    st.table(table_display)
+    
+    # Download button
+    csv = table_display.to_csv(index=False)
+    st.download_button(
+        label="📥 Download Data as CSV",
+        data=csv,
+        file_name=f"strava_activities_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        use_container_width=True
     )
 
 
