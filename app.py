@@ -295,9 +295,28 @@ def main():
         activity_count = count_activities(filtered_df)
         st.metric("Total Workouts", f"{activity_count}")
     
+      # Add descriptive text based on granularity
+    granularity_text = {
+        "Day": "Daily",
+        "Week": "Weekly",
+        "Month": "Monthly"
+    }
+    
     # Volume section
     st.divider()
-    st.subheader("Training Volume")
+    st.subheader(f"Training Volume ({granularity_text.get(granularity, granularity)})")
+        
+    # Set target distance based on granularity
+    target_distances = {
+        "Day": 3000,  # meters
+        "Week": 7000,  # meters
+        "Month": 28000  # meters
+    }
+    target_distance = target_distances.get(granularity)
+    
+    # Display target distance if available
+    if target_distance is not None:
+        st.markdown(f"Target Distance  {target_distance} m")
     
     # Aggregate by selected period using pandas date truncation
     if not filtered_df.empty:
@@ -332,8 +351,10 @@ def main():
             
             # Create bar chart with light blue color
             light_blue = "#60a5fa"  # Tailwind blue-400
+            green = "#10b981"  # Tailwind emerald-500 for target line
             
-            chart = (
+            # Create base bar chart
+            bar_chart = (
                 alt.Chart(aggregated)
                 .mark_bar(color=light_blue, stroke="darkslateblue", strokeWidth=1)
                 .encode(
@@ -359,6 +380,30 @@ def main():
                     height=300
                 )
             )
+            
+            # Add target line if target distance is set
+            if target_distance is not None:
+                # Create target line data
+                target_data = pd.DataFrame({
+                    'target': [target_distance]
+                })
+                
+                target_line = (
+                    alt.Chart(target_data)
+                    .mark_rule(
+                        color=green,
+                        strokeDash=[5, 5],
+                        strokeWidth=2
+                    )
+                    .encode(
+                        y=alt.Y('target:Q', title=None),
+                        tooltip=alt.Tooltip('target:Q', format='.0f', title='Target (m)')
+                    )
+                )
+                
+                chart = (bar_chart + target_line)
+            else:
+                chart = bar_chart
             
             st.altair_chart(chart, use_container_width=True)
         else:
