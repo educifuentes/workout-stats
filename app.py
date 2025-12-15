@@ -128,12 +128,21 @@ def filter_dataframe(df: pd.DataFrame, date_range: tuple[date, date], sport_type
     
     filtered = df.copy()
     
-    # Date range filter
+    # Date range filter - apply both start and end dates inclusively
     start_date, end_date = date_range
-    if start_date:
-        filtered = filtered[filtered["date"].dt.date >= start_date]
-    if end_date:
-        filtered = filtered[filtered["date"].dt.date <= end_date]
+    if start_date and end_date:
+        # Ensure date column is datetime for proper comparison
+        date_series = pd.to_datetime(filtered["date"]).dt.date
+        filtered = filtered[
+            (date_series >= start_date) & 
+            (date_series <= end_date)
+        ]
+    elif start_date:
+        date_series = pd.to_datetime(filtered["date"]).dt.date
+        filtered = filtered[date_series >= start_date]
+    elif end_date:
+        date_series = pd.to_datetime(filtered["date"]).dt.date
+        filtered = filtered[date_series <= end_date]
     
     # Sport type filter
     if sport_type != "All":
@@ -350,9 +359,19 @@ def main():
     # Prepare table data
     table_df = filtered_df.copy()
     
-    # Calculate pace in minutes per meter
-    if "pace_min_per_km" in table_df.columns:
-        table_df["pace_min_per_m"] = table_df["pace_min_per_km"] / 1000.0
+    # Calculate pace in seconds per 100 meters
+    if "pace_s_per_100m" in table_df.columns:
+        pace_col = "pace_s_per_100m"
+    elif "pace_s_per_km" in table_df.columns:
+        # Calculate from seconds per km: divide by 10
+        table_df["pace_s_per_100m"] = table_df["pace_s_per_km"] / 10.0
+        pace_col = "pace_s_per_100m"
+    elif "pace_min_per_km" in table_df.columns:
+        # Calculate from minutes per km: convert to seconds per km, then divide by 10
+        table_df["pace_s_per_100m"] = (table_df["pace_min_per_km"] * 60) / 10.0
+        pace_col = "pace_s_per_100m"
+    else:
+        pace_col = None
     
     # Format columns for display
     display_columns = {
@@ -361,8 +380,10 @@ def main():
         "name": "Activity Name",
         "distance_km": "Distance (km)",
         "moving_time": "Moving Time (s)",
-        "pace_min_per_m": "Pace (min/m)"
     }
+    
+    if pace_col:
+        display_columns[pace_col] = "Pace (s/100m)"
     
     # Select and rename columns
     available_cols = [col for col in display_columns.keys() if col in table_df.columns]
@@ -373,23 +394,11 @@ def main():
     if "Date" in table_display.columns:
         table_display["Date"] = table_display["Date"].dt.strftime("%Y-%m-%d %H:%M")
     
-    # Format pace as MM:SS (minutes:seconds)
-    if "Pace (min/m)" in table_display.columns:
-        def format_pace_as_time(pace_min):
-            """Convert pace in minutes to MM:SS format."""
-            if pd.isna(pace_min) or pace_min == 0:
-                return "N/A"
-            # Convert to total seconds first for accuracy
-            total_seconds = pace_min * 60
-            minutes = int(total_seconds // 60)
-            seconds = int(round(total_seconds % 60))
-            # Handle case where seconds round to 60
-            if seconds == 60:
-                minutes += 1
-                seconds = 0
-            return f"{minutes}:{seconds:02d}"
-        
-        table_display["Pace (min/m)"] = table_display["Pace (min/m)"].apply(format_pace_as_time)
+    # Format pace as seconds per 100m (simple number format)
+    if "Pace (s/100m)" in table_display.columns:
+        table_display["Pace (s/100m)"] = table_display["Pace (s/100m)"].apply(
+            lambda x: f"{x:.2f}" if pd.notna(x) and x > 0 else "N/A"
+        )
     
     # Format distance
     if "Distance (km)" in table_display.columns:
