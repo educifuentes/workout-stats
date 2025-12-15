@@ -155,10 +155,9 @@ def main():
     """Main application entry point."""
     
     # Header section
-    st.title(":material/pool: Workout Dashboard")
+    st.title(":material/pool: Swimming Workouts")
     st.markdown("""
     Track your training volume and pace metrics from Strava activities.
-    This dashboard shows distance trends over time and pace analysis by workout.
     """)
     
     # Load athlete profile information
