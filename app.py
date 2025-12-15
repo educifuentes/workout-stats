@@ -212,9 +212,20 @@ def main():
         min_date = activities_df["date"].dt.date.min()
         max_date = activities_df["date"].dt.date.max()
         
+        # Calculate default start date: minimum date with activity in current year
+        current_year = date.today().year
+        current_year_activities = activities_df[
+            activities_df["date"].dt.year == current_year
+        ]
+        if not current_year_activities.empty:
+            default_start_date = current_year_activities["date"].dt.date.min()
+        else:
+            # Fallback to overall min_date if no activities in current year
+            default_start_date = min_date
+        
         start_date = st.date_input(
             "Start Date",
-            value=min_date,
+            value=default_start_date,
             min_value=min_date,
             max_value=max_date,
             help="Select the start date for analysis"
@@ -324,11 +335,12 @@ def main():
             
             chart = (
                 alt.Chart(aggregated)
-                .mark_bar(color=light_blue)
+                .mark_bar(color=light_blue, stroke="darkslateblue", strokeWidth=1)
                 .encode(
                     x=alt.X(
                         'date:T',
                         title=None,
+                        scale=alt.Scale(paddingInner=0.4, paddingOuter=0.2),
                         axis=alt.Axis(
                             format='%Y-%m-%d',
                             labelAngle=-45,
@@ -351,6 +363,58 @@ def main():
             st.altair_chart(chart, use_container_width=True)
         else:
             st.info("No data available for the selected granularity.")
+    
+    # Distance vs Pace scatter plot
+    st.divider()
+    st.subheader("Distance vs Pace")
+    
+    # Prepare data for scatter plot
+    scatter_df = filtered_df.copy()
+    
+    # Calculate pace in seconds per 100 meters if not available
+    if "pace_s_per_100m" not in scatter_df.columns:
+        if "pace_s_per_km" in scatter_df.columns:
+            scatter_df["pace_s_per_100m"] = scatter_df["pace_s_per_km"] / 10.0
+        elif "pace_min_per_km" in scatter_df.columns:
+            scatter_df["pace_s_per_100m"] = (scatter_df["pace_min_per_km"] * 60) / 10.0
+    
+    # Filter out invalid pace values
+    if "pace_s_per_100m" in scatter_df.columns:
+        scatter_df = scatter_df[
+            scatter_df["pace_s_per_100m"].notna() & 
+            (scatter_df["pace_s_per_100m"] > 0) &
+            scatter_df["distance_km"].notna() &
+            (scatter_df["distance_km"] > 0)
+        ].copy()
+        
+        if not scatter_df.empty:
+            # Create scatter plot
+            scatter_chart = alt.Chart(scatter_df).mark_circle(size=60).encode(
+                x=alt.X(
+                    "distance_km:Q",
+                    title="Distance (km)"
+                ),
+                y=alt.Y(
+                    "pace_s_per_100m:Q",
+                    title="Pace (s/100m)"
+                ),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date", format="%Y-%m-%d"),
+                    alt.Tooltip("name:N", title="Activity"),
+                    alt.Tooltip("distance_km:Q", title="Distance (km)", format=".2f"),
+                    alt.Tooltip("pace_s_per_100m:Q", title="Pace (s/100m)", format=".2f"),
+                    alt.Tooltip("sport_type:N", title="Sport")
+                ]
+            ).properties(
+                width=600,
+                height=400
+            )
+            
+            st.altair_chart(scatter_chart, use_container_width=True)
+        else:
+            st.info("No activities with valid pace and distance data available.")
+    else:
+        st.info("Pace data not available for scatter plot.")
     
     # Data table section
     st.divider()
