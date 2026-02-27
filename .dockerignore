@@ -1,0 +1,16 @@
+.git
+.gitignore
+.streamlit/secrets.toml
+.venv
+venv
+env
+__pycache__
+*.pyc
+.DS_Store
+deploy
+notes
+z_archive
+Dockerfile
+.dockerignore
+deploy_gcp.sh
+requirements_dev.txt

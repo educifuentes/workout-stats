@@ -1,0 +1,40 @@
+steps:
+  # Build the container image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "southamerica-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/strava-stats:$TAG_NAME"
+      - "-t"
+      - "southamerica-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/strava-stats:latest"
+      - "."
+
+  # Push the container image to Artifact Registry
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "--all-tags"
+      - "southamerica-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/strava-stats"
+
+  # Deploy the container to Cloud Run
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "strava-stats"
+      - "--image"
+      - "southamerica-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/strava-stats:$TAG_NAME"
+      - "--region"
+      - "southamerica-west1"
+      - "--allow-unauthenticated"
+      - "--set-secrets=/app/.streamlit/secrets.toml=strava-stats-secrets:latest"
+      - "--port"
+      - "8080"
+
+images:
+  - "southamerica-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/strava-stats:$TAG_NAME"
+  - "southamerica-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/strava-stats:latest"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
